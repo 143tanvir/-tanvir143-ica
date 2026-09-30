@@ -1,8 +1,8 @@
 {
   "name": "insta-robot",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Local Instagram private API client with FCA-compatible InstaBot adapter, cookie/AppState authentication and MQTT realtime messaging.",
-  "displayName": "Tanvir143 ICA",
+  "displayName": "insta-robot ica by Tanvir143",
   "main": "dist/compat.js",
   "types": "dist/index.d.ts",
   "files": [
