@@ -176,27 +176,13 @@ export class AccountRepository extends Repository {
   }
 
   public async currentUser() {
-    try {
-      // Do not use the legacy `edit=true` variant for session validation.
-      // Instagram can return HTTP 200 with an application-level error for
-      // that variant even when the authenticated session is otherwise valid.
-      const { body } = await this.client.request.send<AccountRepositoryCurrentUserResponseRootObject>({
-        url: '/api/v1/accounts/current_user/',
-      });
-      return body.user;
-    } catch (error) {
-      // If current_user is unavailable, validate the same authenticated
-      // session through the logged-in user's info endpoint. This does not
-      // bypass checkpoints or 2FA; it only uses the existing session.
-      const userId = this.client.state.cookieUserId;
-      if (!userId) throw error;
-
-      try {
-        return await this.client.user.info(userId);
-      } catch (_) {
-        throw error;
-      }
-    }
+    const { body } = await this.client.request.send<AccountRepositoryCurrentUserResponseRootObject>({
+      url: '/api/v1/accounts/current_user/',
+      qs: {
+        edit: true,
+      },
+    });
+    return body.user;
   }
 
   public async setBiography(text: string) {
