@@ -20,7 +20,7 @@ const required = [
 const helpers = ['getCurrentUserID', 'listenMqtt', 'listen', 'setBiography'];
 const advanced = ['removeMessageReaction', 'createGroupThread', 'getPresence', 'hideThread', 'leaveThread'];
 
-if (packageJson.name !== '@tanvir143/ica') throw new Error('Package name is not @tanvir143/ica');
+if (packageJson.name !== 'insta-robot') throw new Error('Package name is not @tanvir143/ica');
 if (packageJson.version !== '1.0.0') throw new Error('Package version is not 1.0.0');
 if (packageJson.main !== 'dist/compat.js') throw new Error('Unexpected package main');
 
