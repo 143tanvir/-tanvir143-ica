@@ -1,6 +1,6 @@
 {
   "name": "@tanvir143/ica",
-  "version": "1.0.7",
+  "version": "1.0.0",
   "description": "Local Instagram private API client with FCA-compatible InstaBot adapter, cookie/AppState authentication and MQTT realtime messaging.",
   "displayName": "Tanvir143 ICA",
   "main": "dist/compat.js",
