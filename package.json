@@ -18,11 +18,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/143tanvir/ica-tanvir143.git"
+    "url": "https://github.com/143tanvir/insta-robot.git"
   },
-  "homepage": "https://github.com/143tanvir/ica-tanvir143",
+  "homepage": "https://github.com/143tanvir/insta-robot",
   "bugs": {
-    "url": "https://github.com/143tanvir/ica-tanvir143/issues"
+    "url": "https://github.com/143tanvir/insta-robot/issues"
   },
   "keywords": [
     "instagram",
