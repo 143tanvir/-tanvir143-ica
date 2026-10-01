@@ -198,7 +198,7 @@ class ThriftWriter {
       const b =
         Buffer.alloc(1);
 
-      b.writeInt8(value);
+      b.writeInt8(value, 0);
 
       this.buffer.push(
         b[0]
