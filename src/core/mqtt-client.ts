@@ -396,7 +396,14 @@ class ThriftEncoder {
             Boolean(value)
           );
           break;
-
+          
+       case THRIFT.BYTE:
+         writer.writeInt(
+           descriptor.field,
+           Number(value),
+           8
+        );
+         break;
         case THRIFT.INT16:
           writer.writeInt(
             descriptor.field,
