@@ -65,8 +65,7 @@ class ThriftWriter {
     this.buffer.push(THRIFT.STOP);
 
     if (this.fieldStack.length > 0) {
-      this.currentField =
-        this.fieldStack.pop() as number;
+      this.currentField = this.fieldStack.pop() as number;
     }
   }
 
@@ -198,7 +197,10 @@ class ThriftWriter {
       const b =
         Buffer.alloc(1);
 
-      b.writeInt8(value, 0);
+      b.writeInt8(
+        value,
+        0
+      );
 
       this.buffer.push(
         b[0]
@@ -396,14 +398,15 @@ class ThriftEncoder {
             Boolean(value)
           );
           break;
-          
-       case THRIFT.BYTE:
-         writer.writeInt(
-           descriptor.field,
-           Number(value),
-           8
-        );
-         break;
+
+        case THRIFT.BYTE:
+          writer.writeInt(
+            descriptor.field,
+            Number(value),
+            8
+          );
+          break;
+
         case THRIFT.INT16:
           writer.writeInt(
             descriptor.field,
@@ -474,121 +477,145 @@ class ThriftEncoder {
         field: 1,
         type: THRIFT.BINARY
       },
+
       {
         name: 'willTopic',
         field: 2,
         type: THRIFT.BINARY
       },
+
       {
         name: 'willMessage',
         field: 3,
         type: THRIFT.BINARY
       },
+
       {
         name: 'clientInfo',
         field: 4,
         type: THRIFT.STRUCT,
+
         children: [
           {
             name: 'userId',
             field: 1,
             type: THRIFT.INT64
           },
+
           {
             name: 'userAgent',
             field: 2,
             type: THRIFT.BINARY
           },
+
           {
             name: 'clientCapabilities',
             field: 3,
             type: THRIFT.INT64
           },
+
           {
             name: 'endpointCapabilities',
             field: 4,
             type: THRIFT.INT64
           },
+
           {
             name: 'publishFormat',
             field: 5,
             type: THRIFT.INT32
           },
+
           {
             name: 'noAutomaticForeground',
             field: 6,
             type: THRIFT.FALSE
           },
+
           {
             name: 'makeUserAvailableInForeground',
             field: 7,
             type: THRIFT.TRUE
           },
+
           {
             name: 'deviceId',
             field: 8,
             type: THRIFT.BINARY
           },
+
           {
             name: 'isInitiallyForeground',
             field: 9,
             type: THRIFT.TRUE
           },
+
           {
             name: 'networkType',
             field: 10,
             type: THRIFT.INT32
           },
+
           {
             name: 'networkSubtype',
             field: 11,
             type: THRIFT.INT32
           },
+
           {
             name: 'clientMqttSessionId',
             field: 12,
             type: THRIFT.INT64
           },
+
           {
             name: 'clientIpAddress',
             field: 13,
             type: THRIFT.BINARY
           },
+
           {
             name: 'subscribeTopics',
             field: 14,
             type: THRIFT.LIST
           },
+
           {
             name: 'clientType',
             field: 15,
             type: THRIFT.BINARY
           },
+
           {
             name: 'appId',
             field: 16,
             type: THRIFT.INT64
           },
+
           {
             name: 'overrideNectarLogging',
             field: 17,
             type: THRIFT.FALSE
           },
+
           {
             name: 'connectTokenHash',
             field: 18,
             type: THRIFT.BINARY
           },
+
           {
             name: 'regionPreference',
             field: 19,
             type: THRIFT.BINARY
           },
+
           {
             name: 'deviceSecret',
             field: 20,
             type: THRIFT.BINARY
           },
+
           {
             name: 'clientStack',
             field: 21,
@@ -596,21 +623,25 @@ class ThriftEncoder {
           }
         ]
       },
+
       {
         name: 'password',
         field: 5,
         type: THRIFT.BINARY
       },
+
       {
         name: 'getDiffsRequests',
         field: 6,
         type: THRIFT.LIST
       },
+
       {
         name: 'zeroRatingTokenHash',
         field: 9,
         type: THRIFT.BINARY
       },
+
       {
         name: 'appSpecificInfo',
         field: 10,
@@ -640,7 +671,8 @@ export class InstagramMqttClient {
   private heartbeatInterval:
     NodeJS.Timeout | null = null;
 
-  private isConnecting = false;
+  private isConnecting =
+    false;
 
   private receiveBuffer:
     Buffer = Buffer.alloc(0);
@@ -797,8 +829,6 @@ export class InstagramMqttClient {
 
           password:
             `sessionid=${sessionId}`,
-
-          getDiffsRequests: [],
 
           appSpecificInfo: {
             app_version:
@@ -974,10 +1004,13 @@ export class InstagramMqttClient {
                 'MQTToT disconnected'
               );
 
+              const wasConnecting =
+                this.isConnecting;
+
               this.cleanup();
 
               if (
-                this.isConnecting
+                wasConnecting
               ) {
                 this.finishConnectionError(
                   new Error(
@@ -1009,15 +1042,18 @@ export class InstagramMqttClient {
     ) {
       this.isConnecting = false;
 
-      this.rejectConnection(
+      const finalError =
         error instanceof Error
           ? error
           : new Error(
               String(error)
-            )
+            );
+
+      this.rejectConnection(
+        finalError
       );
 
-      throw error;
+      throw finalError;
     }
   }
 
@@ -1108,12 +1144,6 @@ export class InstagramMqttClient {
     this.setupHeartbeat();
     this.setupReconnect();
 
-    /*
-     * Connecting to the broker is not enough for
-     * Direct Message realtime events. Instagram
-     * requires an Iris/direct subscription carrying
-     * the current inbox sequence state.
-     */
     void this.subscribeToDirectMessages();
 
     if (resolve) {
@@ -1440,10 +1470,6 @@ export class InstagramMqttClient {
     this.finishConnectionSuccess();
   }
 
-  /**
-   * Fetch the current Direct inbox sync state
-   * and subscribe to Instagram Iris updates.
-   */
   private async subscribeToDirectMessages():
     Promise<void> {
     if (
@@ -1514,6 +1540,12 @@ export class InstagramMqttClient {
           compressed,
           0
         );
+
+      if (
+        !this.isConnected()
+      ) {
+        return;
+      }
 
       this.ws!.write(
         packet
