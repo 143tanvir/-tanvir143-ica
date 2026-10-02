@@ -141,6 +141,7 @@ interface LoginOptions {
   password?: string;
   proxy?: string | null;
   userAgent?: string | null;
+  appUserAgent?: string | null;
   listenEvents?: boolean;
   selfListen?: boolean;
   autoMarkRead?: boolean;
@@ -1563,8 +1564,11 @@ export class FcaInstagramApi {
         options.proxy || '';
     }
 
-    if (options?.userAgent) {
-      this.client.state.appUserAgentOverride = String(options.userAgent);
+    // `userAgent` is reserved for browser-style web-session validation.
+    // Keep MQTT on the native Instagram User-Agent unless an explicit
+    // native appUserAgent override is provided.
+    if (options?.appUserAgent) {
+      this.client.state.appUserAgentOverride = String(options.appUserAgent);
     }
 
     const result =
@@ -1789,118 +1793,280 @@ function extractEvents(
 ): any[] {
   const events: any[] = [];
 
-  const candidate =
-    packet?.data ||
-    packet?.message ||
-    packet;
+  const threadIdFromPath = (value: any): string | null => {
+    const path = String(value || '');
+    const prefixes = [
+      '/direct_v2/threads/',
+      '/direct_v2/inbox/threads/'
+    ];
 
-  const arr =
-    Array.isArray(candidate)
-      ? candidate
-      : [candidate];
-
-  for (
-    const item of arr
-  ) {
-    if (
-      !item ||
-      typeof item !== 'object'
-    ) {
-      continue;
+    for (const prefix of prefixes) {
+      if (path.startsWith(prefix)) {
+        return path.slice(prefix.length).split('/', 1)[0] || null;
+      }
     }
 
+    return null;
+  };
+
+  const parseValue = (value: any): any => {
+    if (typeof value !== 'string') {
+      return value;
+    }
+
+    try {
+      return JSON.parse(value);
+    } catch (_) {
+      return { value };
+    }
+  };
+
+  const pushEvent = (
+    raw: any,
+    thread: any = {},
+    deltaType?: any
+  ): void => {
+    if (!raw || typeof raw !== 'object') {
+      return;
+    }
+
+    const mergedThread = {
+      ...thread,
+      thread_id:
+        raw.thread_id ||
+        thread.thread_id ||
+        threadIdFromPath(raw.path) ||
+        undefined,
+      users:
+        raw.users ||
+        thread.users,
+      is_group:
+        raw.is_group ??
+        thread.is_group
+    };
+
+    const hasMessageFields =
+      raw.item_id != null ||
+      raw.message_id != null ||
+      raw.id != null ||
+      raw.text != null ||
+      raw.item_type != null ||
+      raw.type != null;
+
+    if (!hasMessageFields) {
+      return;
+    }
+
+    const event = normalizeItem(
+      raw,
+      mergedThread,
+      botID || undefined
+    );
+
+    const itemType = String(
+      raw.item_type ||
+      raw.type ||
+      ''
+    ).toLowerCase();
+
+    const delta = String(
+      deltaType ||
+      raw.delta_type ||
+      ''
+    );
+
     if (
-      item.delta_type &&
-      item.message
+      /reaction/.test(itemType) ||
+      /reaction/i.test(delta)
     ) {
+      event.type = 'message_reaction';
+    } else if (
+      /unsend|delete/.test(itemType) ||
+      /Unsend|Delete/i.test(delta)
+    ) {
+      event.type = 'message_unsend';
+    } else {
+      event.type = 'message';
+    }
+
+    events.push(event);
+  };
+
+  const walk = (
+    value: any,
+    inheritedThread: any = {},
+    inheritedDelta?: any
+  ): void => {
+    if (!value) {
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        walk(item, inheritedThread, inheritedDelta);
+      }
+      return;
+    }
+
+    if (typeof value !== 'object') {
+      return;
+    }
+
+    // Existing FCA-style delta wrapper.
+    if (value.delta_type && value.message) {
       const raw =
-        item.message;
+        value.message && typeof value.message === 'object'
+          ? value.message
+          : parseValue(value.message);
 
-      const thread = {
+      pushEvent(
+        raw,
+        {
+          ...inheritedThread,
+          thread_id:
+            raw?.thread_id ||
+            value.thread_id ||
+            threadIdFromPath(raw?.path) ||
+            inheritedThread.thread_id
+        },
+        value.delta_type
+      );
+      return;
+    }
+
+    // Current Instagram message-sync packets are shaped like:
+    // [{ data: [{ path, op, value: "{...}" }] }].
+    if (Array.isArray(value.data)) {
+      const metaThread = {
+        ...inheritedThread,
         thread_id:
-          raw.thread_id,
-
-        users:
-          raw.users,
-
-        is_group:
-          raw.is_group
+          value.thread_id ||
+          inheritedThread.thread_id
       };
 
-      const event =
-        normalizeItem(
-          raw,
-          thread,
-          botID || undefined
-        );
+      for (const patch of value.data) {
+        if (!patch || typeof patch !== 'object') {
+          continue;
+        }
 
-      const itemType =
-        String(
-          raw.item_type || ''
-        ).toLowerCase();
-
-      if (
-        /reaction/.test(
-          itemType
-        ) ||
-        item.delta_type ===
-          'deltaReaction'
-      ) {
-        event.type =
-          'message_reaction';
-      } else if (
-        /unsend|delete/.test(
-          itemType
-        ) ||
-        /Unsend|Delete/i.test(
-          String(
-            item.delta_type
+        if (
+          patch.path &&
+          Object.prototype.hasOwnProperty.call(
+            patch,
+            'value'
           )
-        )
-      ) {
-        event.type =
-          'message_unsend';
-      } else {
-        event.type =
-          'message';
+        ) {
+          const parsed = parseValue(patch.value);
+          const threadID =
+            parsed?.thread_id ||
+            threadIdFromPath(patch.path) ||
+            metaThread.thread_id;
+
+          if (parsed && typeof parsed === 'object') {
+            pushEvent(
+              {
+                ...parsed,
+                thread_id: threadID
+              },
+              {
+                ...metaThread,
+                thread_id: threadID
+              },
+              parsed.delta_type
+            );
+
+            // Some patches wrap the actual item in `message`.
+            if (
+              parsed.message &&
+              typeof parsed.message === 'object'
+            ) {
+              pushEvent(
+                {
+                  ...parsed.message,
+                  thread_id:
+                    parsed.message.thread_id ||
+                    threadID
+                },
+                {
+                  ...metaThread,
+                  thread_id: threadID
+                },
+                parsed.delta_type
+              );
+            }
+          }
+        } else {
+          walk(
+            patch,
+            metaThread,
+            inheritedDelta
+          );
+        }
       }
 
-      events.push(event);
-
-      continue;
+      return;
     }
 
+    // Current realtime dispatcher-compatible wrapper.
     if (
-      item.path &&
-      item.item_id
+      value.message &&
+      typeof value.message === 'object'
     ) {
-      events.push(
-        normalizeItem(
-          item,
-          item,
-          botID || undefined
-        )
+      pushEvent(
+        value.message,
+        {
+          ...inheritedThread,
+          thread_id:
+            value.message.thread_id ||
+            value.thread_id ||
+            inheritedThread.thread_id
+        },
+        value.delta_type
       );
-
-      continue;
     }
 
+    // Direct message item already normalized enough for FCA.
     if (
-      item.thread_id &&
+      value.thread_id &&
       (
-        item.text != null ||
-        item.item_type
+        value.text != null ||
+        value.item_type != null ||
+        value.message_id != null ||
+        value.item_id != null
       )
     ) {
-      events.push(
-        normalizeItem(
-          item,
-          item,
-          botID || undefined
-        )
+      pushEvent(
+        value,
+        value,
+        value.delta_type
       );
     }
-  }
+
+    // Legacy direct packet where path + item fields coexist.
+    if (
+      value.path &&
+      (
+        value.item_id != null ||
+        value.message_id != null ||
+        value.text != null ||
+        value.item_type != null
+      )
+    ) {
+      pushEvent(
+        value,
+        {
+          ...inheritedThread,
+          thread_id:
+            value.thread_id ||
+            threadIdFromPath(value.path) ||
+            inheritedThread.thread_id
+        },
+        value.delta_type
+      );
+    }
+  };
+
+  walk(packet);
 
   return events;
 }
@@ -2070,10 +2236,12 @@ export async function loginCompat(
     options.userAgent ||
     DEFAULT_LOGIN_USER_AGENT;
 
-  // The supplied ig-chat-api login uses a browser-style User-Agent while it
-  // validates an existing cookie session. Keep that behavior here and also
-  // allow the caller to override it explicitly.
-  ig.state.appUserAgentOverride = String(loginUserAgent);
+  // `userAgent` is used only for web-session validation. The MQTT transport
+  // must keep the native Instagram app User-Agent generated by State unless
+  // the caller explicitly supplies an appUserAgent override.
+  if (options.appUserAgent) {
+    ig.state.appUserAgentOverride = String(options.appUserAgent);
+  }
 
   const cookieInput =
     options.cookies ??
