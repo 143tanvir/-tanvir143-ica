@@ -5,15 +5,10 @@ import { IgApiClient } from './client';
 
 const debugLogger = debug('ig:mqtt');
 
-// debug() is normally silent unless DEBUG=ig:mqtt is set. Production bots need
-// the realtime state visible in their normal Railway logs, so mirror only
-// lifecycle/error messages to stdout. Authentication material is never logged.
 const logger = (...args: any[]): void => {
   try {
     debugLogger(...args);
-  } catch (_) {
-    // Ignore debug transport errors.
-  }
+  } catch (_) {}
 
   if (process.env.IG_MQTT_DEBUG !== '0') {
     const rendered = args
@@ -32,8 +27,6 @@ const logger = (...args: any[]): void => {
       )
       .join(' ');
 
-    // eslint/tslint are not part of the runtime contract here; keep this
-    // deliberately simple so Railway always exposes MQTT lifecycle logs.
     console.log(`[ICA MQTT] ${rendered}`);
   }
 };
@@ -47,9 +40,6 @@ const REALTIME_HOST = 'edge-mqtt.facebook.com';
 const REALTIME_PORT = 443;
 const REALTIME_APP_ID = 567067343352427;
 
-// Current native Android profile used by the reference realtime client.
-// Keeping the MQTT identity separate from the web/browser login UA prevents a
-// browser User-Agent from being sent to the MQTToT broker.
 const REALTIME_APP_VERSION =
   process.env.IG_REALTIME_APP_VERSION ||
   '448.0.0.52.84';
@@ -134,116 +124,55 @@ class ThriftWriter {
     }
   }
 
-  writeField(
-    field: number,
-    fieldType: number
-  ): void {
-    const delta =
-      field - this.currentField;
+  writeField(field: number, fieldType: number): void {
+    const delta = field - this.currentField;
+    const type = fieldType & 0x0f;
 
-    const type =
-      fieldType & 0x0f;
-
-    if (
-      delta > 0 &&
-      delta <= 15
-    ) {
-      this.buffer.push(
-        (delta << 4) | type
-      );
+    if (delta > 0 && delta <= 15) {
+      this.buffer.push((delta << 4) | type);
     } else {
       this.buffer.push(type);
-
-      this.writeVarInt(
-        this.zigZag(field, 16)
-      );
+      this.writeVarInt(this.zigZag(field, 16));
     }
 
     this.currentField = field;
   }
 
-  writeVarInt(
-    value: number
-  ): void {
-    let current =
-      Math.floor(
-        Math.max(0, value)
-      );
+  writeVarInt(value: number): void {
+    let current = Math.floor(Math.max(0, value));
 
     do {
-      let byte =
-        current % 128;
-
-      current =
-        Math.floor(
-          current / 128
-        );
+      let byte = current % 128;
+      current = Math.floor(current / 128);
 
       if (current !== 0) {
         byte |= 0x80;
       }
 
       this.buffer.push(byte);
-    } while (
-      current !== 0
-    );
+    } while (current !== 0);
   }
 
-  writeStringDirect(
-    value: string
-  ): void {
-    const raw =
-      Buffer.from(
-        String(value),
-        'utf8'
-      );
+  writeStringDirect(value: string): void {
+    const raw = Buffer.from(String(value), 'utf8');
 
-    this.writeVarInt(
-      raw.length
-    );
+    this.writeVarInt(raw.length);
 
-    for (
-      let i = 0;
-      i < raw.length;
-      i += 1
-    ) {
-      this.buffer.push(
-        raw[i]
-      );
+    for (let i = 0; i < raw.length; i += 1) {
+      this.buffer.push(raw[i]);
     }
   }
 
-  writeString(
-    field: number,
-    value: string
-  ): void {
-    this.writeField(
-      field,
-      THRIFT.BINARY
-    );
-
-    this.writeStringDirect(
-      value
-    );
+  writeString(field: number, value: string): void {
+    this.writeField(field, THRIFT.BINARY);
+    this.writeStringDirect(value);
   }
 
-  writeBoolean(
-    field: number,
-    value: boolean
-  ): void {
-    this.writeField(
-      field,
-      value
-        ? THRIFT.TRUE
-        : THRIFT.FALSE
-    );
+  writeBoolean(field: number, value: boolean): void {
+    this.writeField(field, value ? THRIFT.TRUE : THRIFT.FALSE);
   }
 
-  writeInt(
-    field: number,
-    value: number,
-    bits: number
-  ): void {
+  writeInt(field: number, value: number, bits: number): void {
     const type =
       bits === 8
         ? THRIFT.BYTE
@@ -253,33 +182,16 @@ class ThriftWriter {
             ? THRIFT.INT32
             : THRIFT.INT64;
 
-    this.writeField(
-      field,
-      type
-    );
+    this.writeField(field, type);
 
     if (bits === 8) {
-      const b =
-        Buffer.alloc(1);
-
-      b.writeInt8(
-        value,
-        0
-      );
-
-      this.buffer.push(
-        b[0]
-      );
-
+      const b = Buffer.alloc(1);
+      b.writeInt8(value, 0);
+      this.buffer.push(b[0]);
       return;
     }
 
-    this.writeVarInt(
-      this.zigZag(
-        value,
-        bits
-      )
-    );
+    this.writeVarInt(this.zigZag(value, bits));
   }
 
   writeList(
@@ -287,34 +199,21 @@ class ThriftWriter {
     itemType: number,
     values: Array<number | string | Buffer>
   ): void {
-    this.writeField(
-      field,
-      THRIFT.LIST
-    );
+    this.writeField(field, THRIFT.LIST);
 
     const size = values.length;
     const compactItemType = itemType & 0x0f;
 
     if (size < 15) {
-      this.buffer.push(
-        (size << 4) | compactItemType
-      );
+      this.buffer.push((size << 4) | compactItemType);
     } else {
-      this.buffer.push(
-        0xf0 | compactItemType
-      );
-
+      this.buffer.push(0xf0 | compactItemType);
       this.writeVarInt(size);
     }
 
     for (const value of values) {
       if (compactItemType === THRIFT.INT32) {
-        this.writeVarInt(
-          this.zigZag(
-            Number(value),
-            32
-          )
-        );
+        this.writeVarInt(this.zigZag(Number(value), 32));
       } else if (compactItemType === THRIFT.BINARY) {
         const bytes =
           Buffer.isBuffer(value)
@@ -322,6 +221,7 @@ class ThriftWriter {
             : Buffer.from(String(value), 'utf8');
 
         this.writeVarInt(bytes.length);
+
         for (const byte of bytes) {
           this.buffer.push(byte);
         }
@@ -335,98 +235,58 @@ class ThriftWriter {
 
   writeBinaryMap(
     field: number,
-    values: Record<
-      string,
-      string
-    >
+    values: Record<string, string>
   ): void {
-    this.writeField(
-      field,
-      THRIFT.MAP
-    );
+    this.writeField(field, THRIFT.MAP);
 
-    const entries =
-      Object.keys(values);
+    const entries = Object.keys(values);
+    this.writeVarInt(entries.length);
 
-    this.writeVarInt(
-      entries.length
-    );
-
-    if (
-      entries.length === 0
-    ) {
+    if (entries.length === 0) {
       return;
     }
 
     this.buffer.push(
-      (THRIFT.BINARY << 4) |
-        THRIFT.BINARY
+      (THRIFT.BINARY << 4) | THRIFT.BINARY
     );
 
-    for (
-      const key of entries
-    ) {
-      this.writeStringDirect(
-        key
-      );
-
-      this.writeStringDirect(
-        values[key]
-      );
+    for (const key of entries) {
+      this.writeStringDirect(key);
+      this.writeStringDirect(values[key]);
     }
   }
 
-  pushStruct(
-    field: number
-  ): void {
-    this.writeField(
-      field,
-      THRIFT.STRUCT
-    );
+  pushStruct(field: number): void {
+    this.writeField(field, THRIFT.STRUCT);
 
-    this.fieldStack.push(
-      this.currentField
-    );
-
+    this.fieldStack.push(this.currentField);
     this.currentField = 0;
   }
 
   toBuffer(): Buffer {
-    return Buffer.from(
-      this.buffer
-    );
+    return Buffer.from(this.buffer);
   }
 
-  private zigZag(
-    value: number,
-    bits: number
-  ): number {
+  private zigZag(value: number, bits: number): number {
     if (bits === 64) {
       if (value >= 0) {
         return value * 2;
       }
 
-      return (
-        -value * 2
-      ) - 1;
+      return (-value * 2) - 1;
     }
 
     if (value >= 0) {
       return value * 2;
     }
 
-    return (
-      -value * 2
-    ) - 1;
+    return (-value * 2) - 1;
   }
 }
 
 class ThriftEncoder {
-  static encodeConnection(
-    connection: any
-  ): Buffer {
-    const writer =
-      new ThriftWriter();
+  static encodeConnection(connection: any): Buffer {
+    const writer = new ThriftWriter();
 
     this.writeStruct(
       writer,
@@ -444,22 +304,14 @@ class ThriftEncoder {
     data: any,
     descriptors: ThriftDescriptor[]
   ): void {
-    for (
-      const descriptor of descriptors
-    ) {
-      const value =
-        data[descriptor.name];
+    for (const descriptor of descriptors) {
+      const value = data[descriptor.name];
 
-      if (
-        value === undefined ||
-        value === null
-      ) {
+      if (value === undefined || value === null) {
         continue;
       }
 
-      switch (
-        descriptor.type
-      ) {
+      switch (descriptor.type) {
         case THRIFT.BINARY:
           writer.writeString(
             descriptor.field,
@@ -468,12 +320,6 @@ class ThriftEncoder {
           break;
 
         case THRIFT.BOOLEAN:
-          writer.writeBoolean(
-            descriptor.field,
-            Boolean(value)
-          );
-          break;
-
         case THRIFT.TRUE:
         case THRIFT.FALSE:
           writer.writeBoolean(
@@ -514,7 +360,7 @@ class ThriftEncoder {
           );
           break;
 
-        case THRIFT.LIST_INT32: {
+        case THRIFT.LIST_INT32:
           writer.writeList(
             descriptor.field,
             THRIFT.INT32,
@@ -523,9 +369,8 @@ class ThriftEncoder {
               : []
           );
           break;
-        }
 
-        case THRIFT.LIST_BINARY: {
+        case THRIFT.LIST_BINARY:
           writer.writeList(
             descriptor.field,
             THRIFT.BINARY,
@@ -534,12 +379,9 @@ class ThriftEncoder {
               : []
           );
           break;
-        }
 
         case THRIFT.STRUCT:
-          writer.pushStruct(
-            descriptor.field
-          );
+          writer.pushStruct(descriptor.field);
 
           this.writeStruct(
             writer,
@@ -573,175 +415,146 @@ class ThriftEncoder {
         field: 1,
         type: THRIFT.BINARY
       },
-
       {
         name: 'willTopic',
         field: 2,
         type: THRIFT.BINARY
       },
-
       {
         name: 'willMessage',
         field: 3,
         type: THRIFT.BINARY
       },
-
       {
         name: 'clientInfo',
         field: 4,
         type: THRIFT.STRUCT,
-
         children: [
           {
             name: 'userId',
             field: 1,
             type: THRIFT.INT64
           },
-
           {
             name: 'userAgent',
             field: 2,
             type: THRIFT.BINARY
           },
-
           {
             name: 'clientCapabilities',
             field: 3,
             type: THRIFT.INT64
           },
-
           {
             name: 'endpointCapabilities',
             field: 4,
             type: THRIFT.INT64
           },
-
           {
             name: 'publishFormat',
             field: 5,
             type: THRIFT.INT32
           },
-
           {
             name: 'noAutomaticForeground',
             field: 6,
             type: THRIFT.BOOLEAN
           },
-
           {
             name: 'makeUserAvailableInForeground',
             field: 7,
             type: THRIFT.BOOLEAN
           },
-
           {
             name: 'deviceId',
             field: 8,
             type: THRIFT.BINARY
           },
-
           {
             name: 'isInitiallyForeground',
             field: 9,
             type: THRIFT.BOOLEAN
           },
-
           {
             name: 'networkType',
             field: 10,
             type: THRIFT.INT32
           },
-
           {
             name: 'networkSubtype',
             field: 11,
             type: THRIFT.INT32
           },
-
           {
             name: 'clientMqttSessionId',
             field: 12,
             type: THRIFT.INT64
           },
-
           {
             name: 'clientIpAddress',
             field: 13,
             type: THRIFT.BINARY
           },
-
           {
             name: 'subscribeTopics',
             field: 14,
             type: THRIFT.LIST_INT32
           },
-
           {
             name: 'clientType',
             field: 15,
             type: THRIFT.BINARY
           },
-
           {
             name: 'appId',
             field: 16,
             type: THRIFT.INT64
           },
-
           {
             name: 'overrideNectarLogging',
             field: 17,
             type: THRIFT.BOOLEAN
           },
-
           {
             name: 'connectTokenHash',
             field: 18,
             type: THRIFT.BINARY
           },
-
           {
             name: 'regionPreference',
             field: 19,
             type: THRIFT.BINARY
           },
-
           {
             name: 'deviceSecret',
             field: 20,
             type: THRIFT.BINARY
           },
-
           {
             name: 'clientStack',
             field: 21,
             type: THRIFT.BYTE
           },
-
           {
             name: 'fbnsConnectionKey',
             field: 22,
             type: THRIFT.INT64
           },
-
           {
             name: 'fbnsConnectionSecret',
             field: 23,
             type: THRIFT.BINARY
           },
-
           {
             name: 'fbnsDeviceId',
             field: 24,
             type: THRIFT.BINARY
           },
-
           {
             name: 'fbnsDeviceSecret',
             field: 25,
             type: THRIFT.BINARY
           },
-
           {
             name: 'anotherUnknown',
             field: 26,
@@ -749,25 +562,21 @@ class ThriftEncoder {
           }
         ]
       },
-
       {
         name: 'password',
         field: 5,
         type: THRIFT.BINARY
       },
-
       {
         name: 'getDiffsRequests',
         field: 6,
         type: THRIFT.LIST_BINARY
       },
-
       {
         name: 'zeroRatingTokenHash',
         field: 9,
         type: THRIFT.BINARY
       },
-
       {
         name: 'appSpecificInfo',
         field: 10,
@@ -784,67 +593,31 @@ type ParsedPacket = {
 };
 
 export class InstagramMqttClient {
-  private ws:
-    tls.TLSSocket | null = null;
+  private ws: tls.TLSSocket | null = null;
+  private subscriptions: Map<string, Function[]> = new Map();
+  private reconnectInterval: NodeJS.Timeout | null = null;
+  private heartbeatInterval: NodeJS.Timeout | null = null;
+  private isConnecting = false;
+  private receiveBuffer: Buffer = Buffer.alloc(0);
+  private connectionPromiseResolve: (() => void) | null = null;
+  private connectionPromiseReject: ((error: Error) => void) | null = null;
+  private connectionTimeout: NodeJS.Timeout | null = null;
+  private manualDisconnect = false;
+  private reconnectDelay = 5000;
+  private directSubscriptionStarted = false;
 
-  private subscriptions:
-    Map<string, Function[]> =
-      new Map();
+  constructor(private ig: IgApiClient) {}
 
-  private reconnectInterval:
-    NodeJS.Timeout | null = null;
-
-  private heartbeatInterval:
-    NodeJS.Timeout | null = null;
-
-  private isConnecting =
-    false;
-
-  private receiveBuffer:
-    Buffer = Buffer.alloc(0);
-
-  private connectionPromiseResolve:
-    (() => void) | null = null;
-
-  private connectionPromiseReject:
-    ((error: Error) => void) | null = null;
-
-  private connectionTimeout:
-    NodeJS.Timeout | null = null;
-
-  private manualDisconnect =
-    false;
-
-  private reconnectDelay =
-    5000;
-
-  private directSubscriptionStarted =
-    false;
-
-  constructor(
-    private ig: IgApiClient
-  ) {}
-
-  async connect(
-    config?: Partial<MqttConfig>
-  ): Promise<void> {
-    if (
-      this.isConnecting ||
-      this.ws?.authorized
-    ) {
-      logger(
-        'Already connected or connecting'
-      );
-
+  async connect(config?: Partial<MqttConfig>): Promise<void> {
+    if (this.isConnecting || this.ws?.authorized) {
+      logger('Already connected or connecting');
       return;
     }
 
     this.isConnecting = true;
     this.manualDisconnect = false;
 
-    const host =
-      config?.host ||
-      REALTIME_HOST;
+    const host = config?.host || REALTIME_HOST;
 
     try {
       const cookies =
@@ -854,21 +627,16 @@ export class InstagramMqttClient {
 
       const sessionCookie =
         cookies.find(
-          cookie =>
-            cookie.key ===
-            'sessionid'
+          cookie => cookie.key === 'sessionid'
         );
 
-      if (
-        !sessionCookie?.value
-      ) {
+      if (!sessionCookie?.value) {
         throw new Error(
           'Missing sessionid cookie for MQTT realtime'
         );
       }
 
-      const sessionId =
-        sessionCookie.value;
+      const sessionId = sessionCookie.value;
 
       const deviceId =
         this.ig.state.phoneId ||
@@ -881,9 +649,7 @@ export class InstagramMqttClient {
       }
 
       const userId =
-        Number(
-          this.ig.state.cookieUserId
-        );
+        Number(this.ig.state.cookieUserId);
 
       if (
         !Number.isFinite(userId) ||
@@ -895,112 +661,79 @@ export class InstagramMqttClient {
       }
 
       const topics =
-        this.resolveTopicIds(
-          config?.topics
-        );
+        this.resolveTopicIds(config?.topics);
 
-      const connectionPayload =
-        {
-          clientIdentifier:
-            String(deviceId)
-              .substring(0, 20),
+      const connectionPayload = {
+        clientIdentifier:
+          String(deviceId).substring(0, 20),
 
-          clientInfo: {
-            userId,
+        clientInfo: {
+          userId,
 
-            userAgent:
-              buildRealtimeUserAgent(this.ig),
+          userAgent:
+            buildRealtimeUserAgent(this.ig),
 
-            clientCapabilities: 183,
+          clientCapabilities: 183,
+          endpointCapabilities: 0,
+          publishFormat: 1,
+          noAutomaticForeground: false,
+          makeUserAvailableInForeground: true,
 
-            endpointCapabilities: 0,
+          deviceId: String(deviceId),
 
-            publishFormat: 1,
+          isInitiallyForeground: true,
+          networkType: 1,
+          networkSubtype: 0,
 
-            noAutomaticForeground:
-              false,
+          clientMqttSessionId:
+            Date.now() % 0x100000000,
 
-            makeUserAvailableInForeground:
-              true,
+          subscribeTopics: topics,
+          clientType: 'cookie_auth',
+          appId: REALTIME_APP_ID,
+          deviceSecret: '',
+          clientStack: 3
+        },
 
-            deviceId:
-              String(deviceId),
+        password:
+          `sessionid=${sessionId}`,
 
-            isInitiallyForeground:
-              true,
+        appSpecificInfo: {
+          app_version:
+            REALTIME_APP_VERSION,
 
-            networkType: 1,
+          'X-IG-Capabilities':
+            this.ig.state.capabilitiesHeader,
 
-            networkSubtype: 0,
+          everclear_subscriptions:
+            JSON.stringify({
+              inapp_notification_subscribe_comment:
+                '17899377895239777',
 
-            clientMqttSessionId:
-              Date.now() %
-              0x100000000,
+              inapp_notification_subscribe_comment_mention_and_reply:
+                '17899377895239777',
 
-            subscribeTopics:
-              topics,
+              video_call_participant_state_delivery:
+                '17977239895057311',
 
-            clientType:
-              'cookie_auth',
+              presence_subscribe:
+                '17846944882223835'
+            }),
 
-            appId:
-              REALTIME_APP_ID,
+          'User-Agent':
+            buildRealtimeUserAgent(this.ig),
 
-            deviceSecret:
-              '',
+          'Accept-Language':
+            this.ig.state.language.replace('_', '-'),
 
-            clientStack: 3
-          },
+          platform: 'android',
+          ig_mqtt_route: 'django',
+          pubsub_msg_type_blacklist:
+            'direct, typing_type',
 
-          password:
-            `sessionid=${sessionId}`,
-
-          appSpecificInfo: {
-            app_version:
-              REALTIME_APP_VERSION,
-
-            'X-IG-Capabilities':
-              this.ig.state
-                .capabilitiesHeader,
-
-            everclear_subscriptions:
-              JSON.stringify({
-                inapp_notification_subscribe_comment:
-                  '17899377895239777',
-
-                inapp_notification_subscribe_comment_mention_and_reply:
-                  '17899377895239777',
-
-                video_call_participant_state_delivery:
-                  '17977239895057311',
-
-                presence_subscribe:
-                  '17846944882223835'
-              }),
-
-            'User-Agent':
-              buildRealtimeUserAgent(this.ig),
-
-            'Accept-Language':
-              this.ig.state.language
-                .replace(
-                  '_',
-                  '-'
-                ),
-
-            platform:
-              'android',
-
-            ig_mqtt_route:
-              'django',
-
-            pubsub_msg_type_blacklist:
-              'direct, typing_type',
-
-            auth_cache_enabled:
-              '0'
-          }
-        };
+          auth_cache_enabled: '0'
+        }
+      };
 
       const thriftPayload =
         ThriftEncoder.encodeConnection(
@@ -1010,9 +743,7 @@ export class InstagramMqttClient {
       const compressedPayload =
         zlib.deflateSync(
           thriftPayload,
-          {
-            level: 9
-          }
+          { level: 9 }
         );
 
       const connectPacket =
@@ -1029,15 +760,9 @@ export class InstagramMqttClient {
         Buffer.alloc(0);
 
       return await new Promise<void>(
-        (
-          resolve,
-          reject
-        ) => {
-          this.connectionPromiseResolve =
-            resolve;
-
-          this.connectionPromiseReject =
-            reject;
+        (resolve, reject) => {
+          this.connectionPromiseResolve = resolve;
+          this.connectionPromiseReject = reject;
 
           this.connectionTimeout =
             setTimeout(
@@ -1055,17 +780,10 @@ export class InstagramMqttClient {
             tls.connect(
               {
                 host,
-
-                port:
-                  REALTIME_PORT,
-
-                servername:
-                  host,
-
-                rejectUnauthorized:
-                  true
+                port: REALTIME_PORT,
+                servername: host,
+                rejectUnauthorized: true
               },
-
               () => {
                 logger(
                   'TLS connection established'
@@ -1079,15 +797,11 @@ export class InstagramMqttClient {
                   logger(
                     `MQTToT CONNECT sent (${connectPacket.length} bytes)`
                   );
-                } catch (
-                  error
-                ) {
+                } catch (error) {
                   this.finishConnectionError(
                     error instanceof Error
                       ? error
-                      : new Error(
-                          String(error)
-                        )
+                      : new Error(String(error))
                   );
                 }
               }
@@ -1110,9 +824,7 @@ export class InstagramMqttClient {
                 error.message
               );
 
-              if (
-                this.isConnecting
-              ) {
+              if (this.isConnecting) {
                 this.finishConnectionError(
                   error
                 );
@@ -1132,9 +844,7 @@ export class InstagramMqttClient {
 
               this.cleanup();
 
-              if (
-                wasConnecting
-              ) {
+              if (wasConnecting) {
                 this.finishConnectionError(
                   new Error(
                     'MQTToT socket closed before CONNACK'
@@ -1142,9 +852,7 @@ export class InstagramMqttClient {
                 );
               }
 
-              if (
-                !this.manualDisconnect
-              ) {
+              if (!this.manualDisconnect) {
                 this.setupReconnect();
               }
             }
@@ -1160,17 +868,13 @@ export class InstagramMqttClient {
           );
         }
       );
-    } catch (
-      error
-    ) {
+    } catch (error) {
       this.isConnecting = false;
 
       const finalError =
         error instanceof Error
           ? error
-          : new Error(
-              String(error)
-            );
+          : new Error(String(error));
 
       this.rejectConnection(
         finalError
@@ -1183,49 +887,30 @@ export class InstagramMqttClient {
   private resolveTopicIds(
     topics?: string[]
   ): number[] {
-    if (
-      !topics ||
-      topics.length === 0
-    ) {
+    if (!topics || topics.length === 0) {
       return DEFAULT_TOPIC_IDS.slice();
     }
 
-    const resolved:
-      number[] = [];
+    const resolved: number[] = [];
 
-    for (
-      const topic of topics
-    ) {
+    for (const topic of topics) {
       const trimmed =
         String(topic).trim();
 
-      if (
-        /^\d+$/.test(
-          trimmed
-        )
-      ) {
-        resolved.push(
-          Number(trimmed)
-        );
-
+      if (/^\d+$/.test(trimmed)) {
+        resolved.push(Number(trimmed));
         continue;
       }
 
       const id =
-        TOPIC_ALIASES[
-          trimmed
-        ];
+        TOPIC_ALIASES[trimmed];
 
-      if (
-        id !== undefined
-      ) {
+      if (id !== undefined) {
         resolved.push(id);
       }
     }
 
-    if (
-      resolved.length === 0
-    ) {
+    if (resolved.length === 0) {
       return DEFAULT_TOPIC_IDS.slice();
     }
 
@@ -1244,24 +929,33 @@ export class InstagramMqttClient {
       this.connectionTimeout = null;
     }
 
-    const resolve = this.connectionPromiseResolve;
-    const reject = this.connectionPromiseReject;
+    const resolve =
+      this.connectionPromiseResolve;
+
+    const reject =
+      this.connectionPromiseReject;
 
     try {
-      // Do not mark the connection fully ready until the Direct realtime
-      // subscription has actually been sent. `listenMqtt()` awaits connect(),
-      // so this prevents the bot from saying it is realtime-ready while it is
-      // still unsubscribed from Direct messages.
-      await this.subscribeToDirectMessages();
+      const subscribed =
+        await this.subscribeToDirectMessages();
+
+      if (!subscribed) {
+        throw new Error(
+          'Direct realtime subscription failed'
+        );
+      }
 
       this.isConnecting = false;
+
       this.connectionPromiseResolve = null;
       this.connectionPromiseReject = null;
 
       this.setupHeartbeat();
       this.setupReconnect();
 
-      logger('MQTToT authenticated and Direct realtime subscribed');
+      logger(
+        'MQTToT authenticated and Direct realtime subscribed'
+      );
 
       if (resolve) {
         resolve();
@@ -1273,17 +967,20 @@ export class InstagramMqttClient {
           : new Error(String(error));
 
       this.isConnecting = false;
+
       this.connectionPromiseResolve = null;
       this.connectionPromiseReject = null;
+
       this.cleanup();
 
       try {
         this.ws?.end();
-      } catch (_) {
-        // Ignore socket cleanup errors.
-      }
+      } catch (_) {}
 
-      logger('MQTToT realtime setup failed:', finalError);
+      logger(
+        'MQTToT realtime setup failed:',
+        finalError.message
+      );
 
       if (reject) {
         reject(finalError);
@@ -1294,28 +991,18 @@ export class InstagramMqttClient {
   private finishConnectionError(
     error: Error
   ): void {
-    if (
-      this.connectionTimeout
-    ) {
-      clearTimeout(
-        this.connectionTimeout
-      );
-
-      this.connectionTimeout =
-        null;
+    if (this.connectionTimeout) {
+      clearTimeout(this.connectionTimeout);
+      this.connectionTimeout = null;
     }
 
-    this.isConnecting =
-      false;
+    this.isConnecting = false;
 
     const reject =
       this.connectionPromiseReject;
 
-    this.connectionPromiseResolve =
-      null;
-
-    this.connectionPromiseReject =
-      null;
+    this.connectionPromiseResolve = null;
+    this.connectionPromiseReject = null;
 
     if (reject) {
       reject(error);
@@ -1325,17 +1012,12 @@ export class InstagramMqttClient {
   private rejectConnection(
     error: Error
   ): void {
-    if (
-      this.connectionPromiseReject
-    ) {
+    if (this.connectionPromiseReject) {
       const reject =
         this.connectionPromiseReject;
 
-      this.connectionPromiseResolve =
-        null;
-
-      this.connectionPromiseReject =
-        null;
+      this.connectionPromiseResolve = null;
+      this.connectionPromiseReject = null;
 
       reject(error);
     }
@@ -1354,11 +1036,8 @@ export class InstagramMqttClient {
     const variableHeader =
       Buffer.concat([
         Buffer.from([
-          (protocolName.length >> 8) &
-            0xff,
-
-          protocolName.length &
-            0xff
+          (protocolName.length >> 8) & 0xff,
+          protocolName.length & 0xff
         ]),
 
         protocolName,
@@ -1369,9 +1048,7 @@ export class InstagramMqttClient {
         ]),
 
         Buffer.from([
-          (keepAlive >> 8) &
-            0xff,
-
+          (keepAlive >> 8) & 0xff,
           keepAlive & 0xff
         ])
       ]);
@@ -1383,14 +1060,10 @@ export class InstagramMqttClient {
       ]);
 
     return Buffer.concat([
-      Buffer.from([
-        0x10
-      ]),
-
+      Buffer.from([0x10]),
       this.encodeRemainingLength(
         body.length
       ),
-
       body
     ]);
   }
@@ -1412,19 +1085,14 @@ export class InstagramMqttClient {
         break;
       }
 
-      this.handlePacket(
-        packet
-      );
+      this.handlePacket(packet);
     }
   }
 
   private readNextPacket():
     | ParsedPacket
     | null {
-    if (
-      this.receiveBuffer.length <
-      2
-    ) {
+    if (this.receiveBuffer.length < 2) {
       return null;
     }
 
@@ -1441,26 +1109,18 @@ export class InstagramMqttClient {
       }
 
       const byte =
-        this.receiveBuffer[
-          position
-        ];
+        this.receiveBuffer[position];
 
       remainingLength +=
-        (byte & 127) *
-        multiplier;
+        (byte & 127) * multiplier;
 
-      if (
-        (byte & 128) === 0
-      ) {
+      if ((byte & 128) === 0) {
         break;
       }
 
       multiplier *= 128;
 
-      if (
-        multiplier >
-        128 * 128 * 128
-      ) {
+      if (multiplier > 128 * 128 * 128) {
         throw new Error(
           'Invalid MQTT remaining length'
         );
@@ -1470,9 +1130,7 @@ export class InstagramMqttClient {
     }
 
     const totalLength =
-      position +
-      1 +
-      remainingLength;
+      position + 1 + remainingLength;
 
     if (
       this.receiveBuffer.length <
@@ -1488,8 +1146,7 @@ export class InstagramMqttClient {
       position + 1;
 
     const bodyEnd =
-      bodyStart +
-      remainingLength;
+      bodyStart + remainingLength;
 
     const body =
       this.receiveBuffer.slice(
@@ -1503,13 +1160,8 @@ export class InstagramMqttClient {
       );
 
     return {
-      type:
-        (firstByte >> 4) &
-        0x0f,
-
-      flags:
-        firstByte & 0x0f,
-
+      type: (firstByte >> 4) & 0x0f,
+      flags: firstByte & 0x0f,
       body
     };
   }
@@ -1517,9 +1169,7 @@ export class InstagramMqttClient {
   private handlePacket(
     packet: ParsedPacket
   ): void {
-    switch (
-      packet.type
-    ) {
+    switch (packet.type) {
       case 2:
         this.handleConnack(
           packet.body
@@ -1540,15 +1190,11 @@ export class InstagramMqttClient {
         return;
 
       case 9:
-        logger(
-          'SUBACK received'
-        );
+        logger('SUBACK received');
         return;
 
       case 13:
-        logger(
-          'PINGRESP received'
-        );
+        logger('PINGRESP received');
         return;
 
       case 14:
@@ -1572,9 +1218,7 @@ export class InstagramMqttClient {
   private handleConnack(
     body: Buffer
   ): void {
-    if (
-      body.length < 2
-    ) {
+    if (body.length < 2) {
       this.finishConnectionError(
         new Error(
           'Invalid MQTT CONNACK packet'
@@ -1591,9 +1235,7 @@ export class InstagramMqttClient {
       `CONNACK received, return code: ${returnCode}`
     );
 
-    if (
-      returnCode !== 0
-    ) {
+    if (returnCode !== 0) {
       this.finishConnectionError(
         new Error(
           `MQTToT authentication failed (return code ${returnCode})`
@@ -1611,17 +1253,13 @@ export class InstagramMqttClient {
   }
 
   private async subscribeToDirectMessages():
-    Promise<void> {
-    if (
-      this.directSubscriptionStarted
-    ) {
-      return;
+    Promise<boolean> {
+    if (this.directSubscriptionStarted) {
+      return true;
     }
 
-    if (
-      !this.isConnected()
-    ) {
-      return;
+    if (!this.isConnected()) {
+      return false;
     }
 
     try {
@@ -1645,21 +1283,47 @@ export class InstagramMqttClient {
 
       if (
         seqId === undefined ||
-        snapshotAtMs === undefined
+        seqId === null
       ) {
         throw new Error(
-          'Direct inbox did not provide realtime sync state'
+          'Direct inbox did not provide seq_id'
+        );
+      }
+
+      if (
+        snapshotAtMs === undefined ||
+        snapshotAtMs === null
+      ) {
+        throw new Error(
+          'Direct inbox did not provide snapshot_at_ms'
+        );
+      }
+
+      if (
+        !Number.isFinite(
+          Number(seqId)
+        )
+      ) {
+        throw new Error(
+          `Invalid Direct realtime seq_id: ${seqId}`
+        );
+      }
+
+      if (
+        !Number.isFinite(
+          Number(snapshotAtMs)
+        )
+      ) {
+        throw new Error(
+          `Invalid Direct realtime snapshot_at_ms: ${snapshotAtMs}`
         );
       }
 
       const payload =
         JSON.stringify({
-          seq_id:
-            Number(seqId),
-
+          seq_id: Number(seqId),
           snapshot_at_ms:
             Number(snapshotAtMs),
-
           snapshot_app_version:
             REALTIME_APP_VERSION
         });
@@ -1679,31 +1343,32 @@ export class InstagramMqttClient {
           1
         );
 
-      if (
-        !this.isConnected()
-      ) {
-        return;
+      if (!this.isConnected()) {
+        return false;
       }
 
-      this.ws!.write(
-        packet
-      );
+      this.ws!.write(packet);
 
       this.directSubscriptionStarted =
         true;
 
       logger(
-        `Direct realtime subscription sent: seq_id=${seqId}`
+        `Direct realtime subscription sent: seq_id=${seqId}, snapshot_at_ms=${snapshotAtMs}`
       );
-    } catch (
-      error
-    ) {
+
+      return true;
+    } catch (error) {
+      this.directSubscriptionStarted =
+        false;
+
       logger(
         'Failed to subscribe to Direct realtime:',
         error instanceof Error
           ? error.message
-          : error
+          : String(error)
       );
+
+      return false;
     }
   }
 
@@ -1712,9 +1377,7 @@ export class InstagramMqttClient {
     body: Buffer
   ): void {
     try {
-      if (
-        body.length < 2
-      ) {
+      if (body.length < 2) {
         return;
       }
 
@@ -1748,19 +1411,13 @@ export class InstagramMqttClient {
       pos += topicLength;
 
       const qos =
-        (flags >> 1) &
-        0x03;
+        (flags >> 1) & 0x03;
 
       let packetId:
         number | null = null;
 
-      if (
-        qos > 0
-      ) {
-        if (
-          pos + 2 >
-          body.length
-        ) {
+      if (qos > 0) {
+        if (pos + 2 > body.length) {
           return;
         }
 
@@ -1782,24 +1439,18 @@ export class InstagramMqttClient {
         qos === 1 &&
         packetId !== null
       ) {
-        this.sendPubAck(
-          packetId
-        );
+        this.sendPubAck(packetId);
       }
 
       const uncompressed =
-        this.tryDecompress(
-          payload
-        );
+        this.tryDecompress(payload);
 
       const parsed =
         this.parsePayload(
           uncompressed
         );
 
-      if (
-        parsed !== undefined
-      ) {
+      if (parsed !== undefined) {
         this.triggerHandlers(
           topic,
           parsed
@@ -1826,14 +1477,11 @@ export class InstagramMqttClient {
               TOPIC_ALIASES
             ).filter(
               alias =>
-                TOPIC_ALIASES[
-                  alias
-                ] === numericTopic
+                TOPIC_ALIASES[alias] ===
+                numericTopic
             );
 
-          for (
-            const alias of aliases
-          ) {
+          for (const alias of aliases) {
             this.triggerHandlers(
               alias,
               parsed
@@ -1862,9 +1510,7 @@ export class InstagramMqttClient {
             .slice(0, 250)}`
         );
       }
-    } catch (
-      error
-    ) {
+    } catch (error) {
       logger(
         'Error parsing MQTT PUBLISH:',
         error
@@ -1875,9 +1521,7 @@ export class InstagramMqttClient {
   private parsePayload(
     payload: Buffer
   ): any | undefined {
-    if (
-      !payload.length
-    ) {
+    if (!payload.length) {
       return undefined;
     }
 
@@ -1891,20 +1535,15 @@ export class InstagramMqttClient {
     }
 
     try {
-      return JSON.parse(
-        text
-      );
+      return JSON.parse(text);
     } catch (_) {
       const cleaned =
-        text.charCodeAt(0) ===
-        0xfeff
+        text.charCodeAt(0) === 0xfeff
           ? text.slice(1)
           : text;
 
       try {
-        return JSON.parse(
-          cleaned
-        );
+        return JSON.parse(cleaned);
       } catch (_) {
         return undefined;
       }
@@ -1914,19 +1553,13 @@ export class InstagramMqttClient {
   private tryDecompress(
     payload: Buffer
   ): Buffer {
-    if (
-      !payload.length
-    ) {
+    if (!payload.length) {
       return payload;
     }
 
-    if (
-      payload[0] === 0x78
-    ) {
+    if (payload[0] === 0x78) {
       try {
-        return zlib.inflateSync(
-          payload
-        );
+        return zlib.inflateSync(payload);
       } catch (_) {
         try {
           return zlib.inflateRawSync(
@@ -1944,14 +1577,10 @@ export class InstagramMqttClient {
           payload
         );
 
-      if (
-        inflated.length > 0
-      ) {
+      if (inflated.length > 0) {
         return inflated;
       }
-    } catch (_) {
-      // Not compressed.
-    }
+    } catch (_) {}
 
     return payload;
   }
@@ -1959,9 +1588,7 @@ export class InstagramMqttClient {
   private sendPubAck(
     packetId: number
   ): void {
-    if (
-      !this.isConnected()
-    ) {
+    if (!this.isConnected()) {
       return;
     }
 
@@ -1969,22 +1596,15 @@ export class InstagramMqttClient {
       Buffer.from([
         0x40,
         0x02,
-
-        (packetId >> 8) &
-          0xff,
-
+        (packetId >> 8) & 0xff,
         packetId & 0xff
       ]);
 
-    this.ws!.write(
-      packet
-    );
+    this.ws!.write(packet);
   }
 
   private setupHeartbeat(): void {
-    if (
-      this.heartbeatInterval
-    ) {
+    if (this.heartbeatInterval) {
       clearInterval(
         this.heartbeatInterval
       );
@@ -1993,9 +1613,7 @@ export class InstagramMqttClient {
     this.heartbeatInterval =
       setInterval(
         () => {
-          if (
-            this.isConnected()
-          ) {
+          if (this.isConnected()) {
             try {
               this.ws!.write(
                 Buffer.from([
@@ -2004,12 +1622,8 @@ export class InstagramMqttClient {
                 ])
               );
 
-              logger(
-                'PINGREQ sent'
-              );
-            } catch (
-              error
-            ) {
+              logger('PINGREQ sent');
+            } catch (error) {
               logger(
                 'Failed to send PINGREQ:',
                 error
@@ -2022,15 +1636,11 @@ export class InstagramMqttClient {
   }
 
   private setupReconnect(): void {
-    if (
-      this.manualDisconnect
-    ) {
+    if (this.manualDisconnect) {
       return;
     }
 
-    if (
-      this.reconnectInterval
-    ) {
+    if (this.reconnectInterval) {
       return;
     }
 
@@ -2061,15 +1671,12 @@ export class InstagramMqttClient {
   }
 
   private cleanup(): void {
-    if (
-      this.heartbeatInterval
-    ) {
+    if (this.heartbeatInterval) {
       clearInterval(
         this.heartbeatInterval
       );
 
-      this.heartbeatInterval =
-        null;
+      this.heartbeatInterval = null;
     }
 
     this.receiveBuffer =
@@ -2082,8 +1689,7 @@ export class InstagramMqttClient {
   private encodeRemainingLength(
     length: number
   ): Buffer {
-    const bytes: number[] =
-      [];
+    const bytes: number[] = [];
 
     let value =
       Math.max(
@@ -2100,22 +1706,14 @@ export class InstagramMqttClient {
           value / 128
         );
 
-      if (
-        value > 0
-      ) {
+      if (value > 0) {
         encoded |= 0x80;
       }
 
-      bytes.push(
-        encoded
-      );
-    } while (
-      value > 0
-    );
+      bytes.push(encoded);
+    } while (value > 0);
 
-    return Buffer.from(
-      bytes
-    );
+    return Buffer.from(bytes);
   }
 
   private buildPublishPacket(
@@ -2139,37 +1737,28 @@ export class InstagramMqttClient {
 
     const topicLength =
       Buffer.from([
-        (topicBytes.length >> 8) &
-          0xff,
-
-        topicBytes.length &
-          0xff
+        (topicBytes.length >> 8) & 0xff,
+        topicBytes.length & 0xff
       ]);
 
     let packetId =
       Buffer.alloc(0);
 
-    let flags =
-      0x00;
+    let flags = 0x00;
 
-    if (
-      qos === 1
-    ) {
+    if (qos === 1) {
       flags = 0x02;
 
       const id =
         (
           Math.floor(
-            Math.random() *
-              65535
+            Math.random() * 65535
           ) + 1
         ) & 0xffff;
 
       packetId =
         Buffer.from([
-          (id >> 8) &
-            0xff,
-
+          (id >> 8) & 0xff,
           id & 0xff
         ]);
     }
@@ -2199,9 +1788,7 @@ export class InstagramMqttClient {
     threadId: string,
     isTyping: boolean = true
   ): void {
-    if (
-      !this.isConnected()
-    ) {
+    if (!this.isConnected()) {
       logger(
         'MQTT not connected'
       );
@@ -2212,8 +1799,10 @@ export class InstagramMqttClient {
     const payload = {
       action: 'indicate_activity',
       thread_id: String(threadId),
-      activity_status: isTyping ? '1' : '0',
-      client_context: Date.now().toString()
+      activity_status:
+        isTyping ? '1' : '0',
+      client_context:
+        Date.now().toString()
     };
 
     const packet =
@@ -2229,9 +1818,7 @@ export class InstagramMqttClient {
       );
 
     try {
-      this.ws!.write(
-        packet
-      );
+      this.ws!.write(packet);
 
       logger(
         `Typing ${
@@ -2240,9 +1827,7 @@ export class InstagramMqttClient {
             : 'stopped'
         }`
       );
-    } catch (
-      error
-    ) {
+    } catch (error) {
       logger(
         'Failed to send typing indicator:',
         error
@@ -2296,18 +1881,14 @@ export class InstagramMqttClient {
         callback
       );
 
-    if (
-      index !== -1
-    ) {
+    if (index !== -1) {
       handlers.splice(
         index,
         1
       );
     }
 
-    if (
-      handlers.length === 0
-    ) {
+    if (handlers.length === 0) {
       this.subscriptions.delete(
         topic
       );
@@ -2333,9 +1914,7 @@ export class InstagramMqttClient {
     ) {
       try {
         handler(data);
-      } catch (
-        error
-      ) {
+      } catch (error) {
         logger(
           'MQTT handler error:',
           error
@@ -2345,35 +1924,27 @@ export class InstagramMqttClient {
   }
 
   async disconnect(): Promise<void> {
-    this.manualDisconnect =
-      true;
+    this.manualDisconnect = true;
 
-    if (
-      this.reconnectInterval
-    ) {
+    if (this.reconnectInterval) {
       clearInterval(
         this.reconnectInterval
       );
 
-      this.reconnectInterval =
-        null;
+      this.reconnectInterval = null;
     }
 
     this.cleanup();
 
-    if (
-      this.connectionTimeout
-    ) {
+    if (this.connectionTimeout) {
       clearTimeout(
         this.connectionTimeout
       );
 
-      this.connectionTimeout =
-        null;
+      this.connectionTimeout = null;
     }
 
-    this.isConnecting =
-      false;
+    this.isConnecting = false;
 
     this.connectionPromiseResolve =
       null;
@@ -2385,24 +1956,21 @@ export class InstagramMqttClient {
       return;
     }
 
-    const socket =
-      this.ws;
-
+    const socket = this.ws;
     this.ws = null;
 
     await new Promise<void>(
       resolve => {
         let settled = false;
 
-        const done =
-          () => {
-            if (settled) {
-              return;
-            }
+        const done = () => {
+          if (settled) {
+            return;
+          }
 
-            settled = true;
-            resolve();
-          };
+          settled = true;
+          resolve();
+        };
 
         socket.once(
           'close',
@@ -2429,9 +1997,7 @@ export class InstagramMqttClient {
           () => {
             try {
               socket.destroy();
-            } catch (_) {
-              // Ignore.
-            }
+            } catch (_) {}
 
             done();
           },
