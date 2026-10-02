@@ -19,25 +19,21 @@ export class DirectInboxFeed extends Feed<
   }
 
   async request() {
-    const trackingId =
-      typeof (this.client as any).generateUuid === 'function'
-        ? (this.client as any).generateUuid()
-        : this.client.state.uuid;
+    const trackingId = this.client.state.uuid;
 
     const params: Record<string, any> = {
       eb_device_id: '0',
       igd_request_log_tracking_id: trackingId,
 
       visual_message_return_type: 'unseen',
-      thread_message_limit: 10,
-      persistentBadging: true,
-      limit: 20,
+      thread_message_limit: '10',
+      persistentBadging: 'true',
+      limit: '20',
 
-      // Instagram's current inbox bootstrap request
-      is_prefetching: false,
+      is_prefetching: 'false',
       fetch_reason: this.cursor ? 'page_scroll' : 'initial_snapshot',
-      include_old_mrs: false,
-      no_pending_badge: true,
+      include_old_mrs: 'false',
+      no_pending_badge: 'true',
       push_disabled: 'true',
     };
 
@@ -46,18 +42,39 @@ export class DirectInboxFeed extends Feed<
       params.direction = 'older';
     }
 
-    const { body } =
-      await this.client.request.send<DirectInboxFeedResponse>({
-        url: `/api/v1/direct_v2/inbox/`,
-        qs: params,
-      });
+    try {
+      const { body } =
+        await this.client.request.send<DirectInboxFeedResponse>({
+          url: '/api/v1/direct_v2/inbox/',
+          qs: params,
+        });
 
-    this.state = body;
-    return body;
+      this.state = body;
+
+      return body;
+    } catch (error: any) {
+      const response = error?.response;
+
+      console.error(
+        '[ICA DIRECT] Inbox request failed:',
+        JSON.stringify(
+          {
+            statusCode: response?.statusCode,
+            body: response?.body,
+            headers: response?.headers,
+          },
+          null,
+          2,
+        ),
+      );
+
+      throw error;
+    }
   }
 
   async items() {
     const response = await this.request();
+
     return response.inbox.threads;
   }
 
@@ -65,7 +82,7 @@ export class DirectInboxFeed extends Feed<
     const threads = await this.items();
 
     return threads.map(thread =>
-      this.client.entity.directThread(thread.thread_id)
+      this.client.entity.directThread(thread.thread_id),
     );
   }
 }
