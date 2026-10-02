@@ -38,28 +38,17 @@ export class DirectInboxFeed extends Feed<
 
     const qs: Record<string, any> = {
       eb_device_id: '0',
-
-      igd_request_log_tracking_id:
-        requestTrackingId,
-
+      igd_request_log_tracking_id: requestTrackingId,
       visual_message_return_type: 'unseen',
-
       thread_message_limit: 10,
-
       persistentBadging: true,
-
       limit: 20,
-
       is_prefetching: false,
-
       fetch_reason: isPaging
         ? 'page_scroll'
         : 'initial_snapshot',
-
       include_old_mrs: false,
-
       no_pending_badge: true,
-
       push_disabled: false,
     };
 
