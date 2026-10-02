@@ -14,6 +14,14 @@ const REALTIME_HOST = 'edge-mqtt.facebook.com';
 const REALTIME_PORT = 443;
 const REALTIME_APP_ID = 567067343352427;
 
+// Current native Android profile used by the reference realtime client.
+// Keeping the MQTT identity separate from the web/browser login UA prevents a
+// browser User-Agent from being sent to the MQTToT broker.
+const REALTIME_APP_VERSION = '448.0.0.0.20';
+const REALTIME_APP_VERSION_CODE = '1065560286';
+const REALTIME_DEFAULT_USER_AGENT =
+  `Instagram ${REALTIME_APP_VERSION} Android (34/14; 480dpi; 1344x2992; Google/google; Pixel 8 Pro; husky; husky; en_US; ${REALTIME_APP_VERSION_CODE})`;
+
 const DEFAULT_TOPIC_IDS = [
   88,
   135,
@@ -46,7 +54,11 @@ const THRIFT = {
   BINARY: 0x08,
   LIST: 0x09,
   MAP: 0x0b,
-  STRUCT: 0x0c
+  STRUCT: 0x0c,
+  BOOLEAN: 0xa1,
+  LIST_INT32: (0x05 << 8) | 0x09,
+  LIST_BINARY: (0x08 << 8) | 0x09,
+  MAP_BINARY_BINARY: (0x88 << 8) | 0x0b
 };
 
 type ThriftDescriptor = {
@@ -217,43 +229,54 @@ class ThriftWriter {
     );
   }
 
-  writeIntList(
+  writeList(
     field: number,
-    values: number[]
+    itemType: number,
+    values: Array<number | string | Buffer>
   ): void {
     this.writeField(
       field,
       THRIFT.LIST
     );
 
-    const size =
-      values.length;
+    const size = values.length;
+    const compactItemType = itemType & 0x0f;
 
     if (size < 15) {
       this.buffer.push(
-        (size << 4) |
-          THRIFT.INT32
+        (size << 4) | compactItemType
       );
     } else {
       this.buffer.push(
-        0xf0 |
-          THRIFT.INT32
+        0xf0 | compactItemType
       );
 
-      this.writeVarInt(
-        size
-      );
+      this.writeVarInt(size);
     }
 
-    for (
-      const value of values
-    ) {
-      this.writeVarInt(
-        this.zigZag(
-          value,
-          32
-        )
-      );
+    for (const value of values) {
+      if (compactItemType === THRIFT.INT32) {
+        this.writeVarInt(
+          this.zigZag(
+            Number(value),
+            32
+          )
+        );
+      } else if (compactItemType === THRIFT.BINARY) {
+        const bytes =
+          Buffer.isBuffer(value)
+            ? value
+            : Buffer.from(String(value), 'utf8');
+
+        this.writeVarInt(bytes.length);
+        for (const byte of bytes) {
+          this.buffer.push(byte);
+        }
+      } else {
+        throw new Error(
+          `Unsupported Thrift list item type: ${compactItemType}`
+        );
+      }
     }
   }
 
@@ -391,6 +414,13 @@ class ThriftEncoder {
           );
           break;
 
+        case THRIFT.BOOLEAN:
+          writer.writeBoolean(
+            descriptor.field,
+            Boolean(value)
+          );
+          break;
+
         case THRIFT.TRUE:
         case THRIFT.FALSE:
           writer.writeBoolean(
@@ -431,14 +461,27 @@ class ThriftEncoder {
           );
           break;
 
-        case THRIFT.LIST:
-          writer.writeIntList(
+        case THRIFT.LIST_INT32: {
+          writer.writeList(
             descriptor.field,
+            THRIFT.INT32,
             Array.isArray(value)
               ? value.map(Number)
               : []
           );
           break;
+        }
+
+        case THRIFT.LIST_BINARY: {
+          writer.writeList(
+            descriptor.field,
+            THRIFT.BINARY,
+            Array.isArray(value)
+              ? value
+              : []
+          );
+          break;
+        }
 
         case THRIFT.STRUCT:
           writer.pushStruct(
@@ -529,13 +572,13 @@ class ThriftEncoder {
           {
             name: 'noAutomaticForeground',
             field: 6,
-            type: THRIFT.FALSE
+            type: THRIFT.BOOLEAN
           },
 
           {
             name: 'makeUserAvailableInForeground',
             field: 7,
-            type: THRIFT.TRUE
+            type: THRIFT.BOOLEAN
           },
 
           {
@@ -547,7 +590,7 @@ class ThriftEncoder {
           {
             name: 'isInitiallyForeground',
             field: 9,
-            type: THRIFT.TRUE
+            type: THRIFT.BOOLEAN
           },
 
           {
@@ -577,7 +620,7 @@ class ThriftEncoder {
           {
             name: 'subscribeTopics',
             field: 14,
-            type: THRIFT.LIST
+            type: THRIFT.LIST_INT32
           },
 
           {
@@ -595,7 +638,7 @@ class ThriftEncoder {
           {
             name: 'overrideNectarLogging',
             field: 17,
-            type: THRIFT.FALSE
+            type: THRIFT.BOOLEAN
           },
 
           {
@@ -620,6 +663,36 @@ class ThriftEncoder {
             name: 'clientStack',
             field: 21,
             type: THRIFT.BYTE
+          },
+
+          {
+            name: 'fbnsConnectionKey',
+            field: 22,
+            type: THRIFT.INT64
+          },
+
+          {
+            name: 'fbnsConnectionSecret',
+            field: 23,
+            type: THRIFT.BINARY
+          },
+
+          {
+            name: 'fbnsDeviceId',
+            field: 24,
+            type: THRIFT.BINARY
+          },
+
+          {
+            name: 'fbnsDeviceSecret',
+            field: 25,
+            type: THRIFT.BINARY
+          },
+
+          {
+            name: 'anotherUnknown',
+            field: 26,
+            type: THRIFT.INT64
           }
         ]
       },
@@ -633,7 +706,7 @@ class ThriftEncoder {
       {
         name: 'getDiffsRequests',
         field: 6,
-        type: THRIFT.LIST
+        type: THRIFT.LIST_BINARY
       },
 
       {
@@ -783,8 +856,8 @@ export class InstagramMqttClient {
             userId,
 
             userAgent:
-              this.ig.state
-                .appUserAgent,
+              this.ig.state.appUserAgentOverride ||
+              REALTIME_DEFAULT_USER_AGENT,
 
             clientCapabilities: 183,
 
@@ -832,8 +905,7 @@ export class InstagramMqttClient {
 
           appSpecificInfo: {
             app_version:
-              this.ig.state
-                .appVersion,
+              REALTIME_APP_VERSION,
 
             'X-IG-Capabilities':
               this.ig.state
@@ -855,8 +927,8 @@ export class InstagramMqttClient {
               }),
 
             'User-Agent':
-              this.ig.state
-                .appUserAgent,
+              this.ig.state.appUserAgentOverride ||
+              REALTIME_DEFAULT_USER_AGENT,
 
             'Accept-Language':
               this.ig.state.language
@@ -1523,7 +1595,7 @@ export class InstagramMqttClient {
             Number(snapshotAtMs),
 
           snapshot_app_version:
-            this.ig.state.appVersion
+            REALTIME_APP_VERSION
         });
 
       const compressed =
@@ -1538,7 +1610,7 @@ export class InstagramMqttClient {
         this.buildPublishPacket(
           '/ig_sub_iris',
           compressed,
-          0
+          1
         );
 
       if (
