@@ -2,7 +2,7 @@ import { Expose } from 'class-transformer';
 import { Feed } from '../core/feed';
 import {
   DirectInboxFeedResponse,
-  DirectInboxFeedResponseThreadsItem
+  DirectInboxFeedResponseThreadsItem,
 } from '../responses';
 import { DirectThreadEntity } from '../entities';
 
@@ -19,30 +19,38 @@ export class DirectInboxFeed extends Feed<
   }
 
   async request() {
-    const { body } = await this.client.request.send<DirectInboxFeedResponse>({
-      url: `/api/v1/direct_v2/inbox/`,
-      qs: {
-        eb_device_id: '0',
-        igd_request_log_tracking_id: this.client.state.uuid,
+    const trackingId =
+      typeof (this.client as any).generateUuid === 'function'
+        ? (this.client as any).generateUuid()
+        : this.client.state.uuid;
 
-        visual_message_return_type: 'unseen',
-        thread_message_limit: 10,
-        persistentBadging: true,
-        limit: 20,
+    const params: Record<string, any> = {
+      eb_device_id: '0',
+      igd_request_log_tracking_id: trackingId,
 
-        is_prefetching: !this.cursor,
-        fetch_reason: this.cursor ? 'page_scroll' : 'initial_snapshot',
-        include_old_mrs: false,
-        no_pending_badge: true,
+      visual_message_return_type: 'unseen',
+      thread_message_limit: 10,
+      persistentBadging: true,
+      limit: 20,
 
-        ...(this.cursor
-          ? {
-              cursor: this.cursor,
-              direction: 'older',
-            }
-          : {}),
-      },
-    });
+      // Instagram's current inbox bootstrap request
+      is_prefetching: false,
+      fetch_reason: this.cursor ? 'page_scroll' : 'initial_snapshot',
+      include_old_mrs: false,
+      no_pending_badge: true,
+      push_disabled: 'true',
+    };
+
+    if (this.cursor) {
+      params.cursor = this.cursor;
+      params.direction = 'older';
+    }
+
+    const { body } =
+      await this.client.request.send<DirectInboxFeedResponse>({
+        url: `/api/v1/direct_v2/inbox/`,
+        qs: params,
+      });
 
     this.state = body;
     return body;
@@ -55,6 +63,7 @@ export class DirectInboxFeed extends Feed<
 
   async records(): Promise<DirectThreadEntity[]> {
     const threads = await this.items();
+
     return threads.map(thread =>
       this.client.entity.directThread(thread.thread_id)
     );
