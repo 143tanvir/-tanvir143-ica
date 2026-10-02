@@ -19,7 +19,14 @@ export class DirectInboxFeed extends Feed<
   }
 
   async request() {
-    const trackingId = this.client.state.uuid;
+    /**
+     * IMPORTANT:
+     * state.uuid is the device UUID and is persistent.
+     *
+     * Instagram's Direct Inbox bootstrap request uses a fresh
+     * request tracking UUID, so generate a new one for every request.
+     */
+    const trackingId = this.client.state.generateUuid();
 
     const params: Record<string, any> = {
       eb_device_id: '0',
@@ -31,12 +38,17 @@ export class DirectInboxFeed extends Feed<
       limit: '20',
 
       is_prefetching: 'false',
-      fetch_reason: this.cursor ? 'page_scroll' : 'initial_snapshot',
+      fetch_reason: this.cursor
+        ? 'page_scroll'
+        : 'initial_snapshot',
       include_old_mrs: 'false',
       no_pending_badge: 'true',
       push_disabled: 'true',
     };
 
+    /**
+     * Pagination request.
+     */
     if (this.cursor) {
       params.cursor = this.cursor;
       params.direction = 'older';
@@ -44,10 +56,12 @@ export class DirectInboxFeed extends Feed<
 
     try {
       const { body } =
-        await this.client.request.send<DirectInboxFeedResponse>({
-          url: '/api/v1/direct_v2/inbox/',
-          qs: params,
-        });
+        await this.client.request.send<DirectInboxFeedResponse>(
+          {
+            url: '/api/v1/direct_v2/inbox/',
+            qs: params,
+          },
+        );
 
       this.state = body;
 
@@ -82,7 +96,9 @@ export class DirectInboxFeed extends Feed<
     const threads = await this.items();
 
     return threads.map(thread =>
-      this.client.entity.directThread(thread.thread_id),
+      this.client.entity.directThread(
+        thread.thread_id,
+      ),
     );
   }
 }
