@@ -21,7 +21,7 @@ const helpers = ['getCurrentUserID', 'listenMqtt', 'listen', 'setBiography'];
 const advanced = ['removeMessageReaction', 'createGroupThread', 'getPresence', 'hideThread', 'leaveThread'];
 
 if (packageJson.name !== 'insta-robot') throw new Error('Package name is not insta-robot');
-if (packageJson.version !== '1.1.0') throw new Error('Package version is not 1.0.8');
+if (packageJson.version !== '1.1.1') throw new Error('Package version is not 1.0.8');
 if (packageJson.main !== 'dist/compat.js') throw new Error('Unexpected package main');
 
 for (const file of [path.join(dist, 'compat.js'), path.join(dist, 'fca-compat.js'), path.join(dist, 'index.js')]) {
