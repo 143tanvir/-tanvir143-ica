@@ -1702,25 +1702,20 @@ export class FcaInstagramApi {
         }
       };
 
-    this.client.mqtt.on(
+    const topics = [
+      '146',
+      '133',
+      '132',
+      '88',
       '/ig_message_sync',
-      onMessage
-    );
-
-    this.client.mqtt.on(
       '/ig_send_message_response',
-      onMessage
-    );
-
-    this.client.mqtt.on(
       '/ig_typing_indicator',
-      onMessage
-    );
+      '/pubsub'
+    ];
 
-    this.client.mqtt.on(
-      '/pubsub',
-      onMessage
-    );
+    for (const topic of topics) {
+      this.client.mqtt.on(topic, onMessage);
+    }
 
     handlers.push(
       onMessage
@@ -1746,25 +1741,20 @@ export class FcaInstagramApi {
 
       stopped = true;
 
-      this.client.mqtt.off(
+      const topics = [
+        '146',
+        '133',
+        '132',
+        '88',
         '/ig_message_sync',
-        onMessage
-      );
-
-      this.client.mqtt.off(
         '/ig_send_message_response',
-        onMessage
-      );
-
-      this.client.mqtt.off(
         '/ig_typing_indicator',
-        onMessage
-      );
+        '/pubsub'
+      ];
 
-      this.client.mqtt.off(
-        '/pubsub',
-        onMessage
-      );
+      for (const topic of topics) {
+        this.client.mqtt.off(topic, onMessage);
+      }
 
       const index =
         handlers.indexOf(
@@ -1962,6 +1952,18 @@ function extractEvents(
             threadIdFromPath(patch.path) ||
             metaThread.thread_id;
 
+          if (Array.isArray(parsed)) {
+            walk(
+              parsed,
+              {
+                ...metaThread,
+                thread_id: threadID
+              },
+              inheritedDelta
+            );
+            continue;
+          }
+
           if (parsed && typeof parsed === 'object') {
             pushEvent(
               {
@@ -1994,13 +1996,13 @@ function extractEvents(
                 parsed.delta_type
               );
             }
+          } else {
+            walk(
+              patch,
+              metaThread,
+              inheritedDelta
+            );
           }
-        } else {
-          walk(
-            patch,
-            metaThread,
-            inheritedDelta
-          );
         }
       }
 
