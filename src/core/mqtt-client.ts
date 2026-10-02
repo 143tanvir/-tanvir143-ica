@@ -3,7 +3,40 @@ import * as zlib from 'zlib';
 import debug from 'debug';
 import { IgApiClient } from './client';
 
-const logger = debug('ig:mqtt');
+const debugLogger = debug('ig:mqtt');
+
+// debug() is normally silent unless DEBUG=ig:mqtt is set. Production bots need
+// the realtime state visible in their normal Railway logs, so mirror only
+// lifecycle/error messages to stdout. Authentication material is never logged.
+const logger = (...args: any[]): void => {
+  try {
+    debugLogger(...args);
+  } catch (_) {
+    // Ignore debug transport errors.
+  }
+
+  if (process.env.IG_MQTT_DEBUG !== '0') {
+    const rendered = args
+      .map((value: any) =>
+        value instanceof Error
+          ? value.stack || value.message
+          : typeof value === 'string'
+            ? value
+            : (() => {
+                try {
+                  return JSON.stringify(value);
+                } catch (_) {
+                  return String(value);
+                }
+              })()
+      )
+      .join(' ');
+
+    // eslint/tslint are not part of the runtime contract here; keep this
+    // deliberately simple so Railway always exposes MQTT lifecycle logs.
+    console.log(`[ICA MQTT] ${rendered}`);
+  }
+};
 
 export interface MqttConfig {
   host?: string;
@@ -17,10 +50,30 @@ const REALTIME_APP_ID = 567067343352427;
 // Current native Android profile used by the reference realtime client.
 // Keeping the MQTT identity separate from the web/browser login UA prevents a
 // browser User-Agent from being sent to the MQTToT broker.
-const REALTIME_APP_VERSION = '448.0.0.0.20';
-const REALTIME_APP_VERSION_CODE = '1065560286';
-const REALTIME_DEFAULT_USER_AGENT =
-  `Instagram ${REALTIME_APP_VERSION} Android (34/14; 480dpi; 1344x2992; Google/google; Pixel 8 Pro; husky; husky; en_US; ${REALTIME_APP_VERSION_CODE})`;
+const REALTIME_APP_VERSION =
+  process.env.IG_REALTIME_APP_VERSION ||
+  '448.0.0.52.84';
+const REALTIME_APP_VERSION_CODE =
+  process.env.IG_REALTIME_APP_VERSION_CODE ||
+  '385412061';
+
+function buildRealtimeUserAgent(ig: IgApiClient): string {
+  const override =
+    (ig.state as any).appUserAgentOverride;
+
+  if (override) {
+    return String(override);
+  }
+
+  const deviceString =
+    String(ig.state.deviceString ||
+      '34/14; 480dpi; 1344x2992; Google/google; Pixel 8 Pro; husky; husky');
+
+  const language =
+    String(ig.state.language || 'en_US');
+
+  return `Instagram ${REALTIME_APP_VERSION} Android (${deviceString}; ${language}; ${REALTIME_APP_VERSION_CODE})`;
+}
 
 const DEFAULT_TOPIC_IDS = [
   88,
@@ -856,8 +909,7 @@ export class InstagramMqttClient {
             userId,
 
             userAgent:
-              this.ig.state.appUserAgentOverride ||
-              REALTIME_DEFAULT_USER_AGENT,
+              buildRealtimeUserAgent(this.ig),
 
             clientCapabilities: 183,
 
@@ -927,8 +979,7 @@ export class InstagramMqttClient {
               }),
 
             'User-Agent':
-              this.ig.state.appUserAgentOverride ||
-              REALTIME_DEFAULT_USER_AGENT,
+              buildRealtimeUserAgent(this.ig),
 
             'Accept-Language':
               this.ig.state.language
@@ -1183,43 +1234,60 @@ export class InstagramMqttClient {
     );
   }
 
-  private finishConnectionSuccess(): void {
-    if (
-      !this.isConnecting
-    ) {
+  private async finishConnectionSuccess(): Promise<void> {
+    if (!this.isConnecting) {
       return;
     }
 
-    this.isConnecting =
-      false;
-
-    if (
-      this.connectionTimeout
-    ) {
-      clearTimeout(
-        this.connectionTimeout
-      );
-
-      this.connectionTimeout =
-        null;
+    if (this.connectionTimeout) {
+      clearTimeout(this.connectionTimeout);
+      this.connectionTimeout = null;
     }
 
-    const resolve =
-      this.connectionPromiseResolve;
+    const resolve = this.connectionPromiseResolve;
+    const reject = this.connectionPromiseReject;
 
-    this.connectionPromiseResolve =
-      null;
+    try {
+      // Do not mark the connection fully ready until the Direct realtime
+      // subscription has actually been sent. `listenMqtt()` awaits connect(),
+      // so this prevents the bot from saying it is realtime-ready while it is
+      // still unsubscribed from Direct messages.
+      await this.subscribeToDirectMessages();
 
-    this.connectionPromiseReject =
-      null;
+      this.isConnecting = false;
+      this.connectionPromiseResolve = null;
+      this.connectionPromiseReject = null;
 
-    this.setupHeartbeat();
-    this.setupReconnect();
+      this.setupHeartbeat();
+      this.setupReconnect();
 
-    void this.subscribeToDirectMessages();
+      logger('MQTToT authenticated and Direct realtime subscribed');
 
-    if (resolve) {
-      resolve();
+      if (resolve) {
+        resolve();
+      }
+    } catch (error) {
+      const finalError =
+        error instanceof Error
+          ? error
+          : new Error(String(error));
+
+      this.isConnecting = false;
+      this.connectionPromiseResolve = null;
+      this.connectionPromiseReject = null;
+      this.cleanup();
+
+      try {
+        this.ws?.end();
+      } catch (_) {
+        // Ignore socket cleanup errors.
+      }
+
+      logger('MQTToT realtime setup failed:', finalError);
+
+      if (reject) {
+        reject(finalError);
+      }
     }
   }
 
@@ -1539,7 +1607,7 @@ export class InstagramMqttClient {
       'MQTToT authenticated'
     );
 
-    this.finishConnectionSuccess();
+    void this.finishConnectionSuccess();
   }
 
   private async subscribeToDirectMessages():
@@ -1579,11 +1647,9 @@ export class InstagramMqttClient {
         seqId === undefined ||
         snapshotAtMs === undefined
       ) {
-        logger(
+        throw new Error(
           'Direct inbox did not provide realtime sync state'
         );
-
-        return;
       }
 
       const payload =
@@ -1608,7 +1674,7 @@ export class InstagramMqttClient {
 
       const packet =
         this.buildPublishPacket(
-          '/ig_sub_iris',
+          '134',
           compressed,
           1
         );
@@ -2144,25 +2210,22 @@ export class InstagramMqttClient {
     }
 
     const payload = {
-      thread_id:
-        String(threadId),
-
-      activity_status:
-        isTyping
-          ? '1'
-          : '0',
-
-      client_context:
-        Date.now().toString()
+      action: 'indicate_activity',
+      thread_id: String(threadId),
+      activity_status: isTyping ? '1' : '0',
+      client_context: Date.now().toString()
     };
 
     const packet =
       this.buildPublishPacket(
-        '/ig_typing_indicator',
-        JSON.stringify(
-          payload
+        '132',
+        zlib.deflateSync(
+          Buffer.from(
+            JSON.stringify(payload),
+            'utf8'
+          )
         ),
-        0
+        1
       );
 
     try {
